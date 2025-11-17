@@ -1,0 +1,117 @@
+# TrainingLlama3_LoRA.py
+import torch
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    Trainer,
+    TrainingArguments,
+    DataCollatorForLanguageModeling
+)
+from datasets import load_dataset
+from huggingface_hub import login
+import os
+
+# PEFT / LoRA imports
+from peft import LoraConfig, get_peft_model, TaskType
+
+def main():
+    # === 1. Load your dataset ===
+    dataset = load_dataset("ShashiVish/cover-letter-dataset")
+    print("Columns:", dataset['train'].column_names)
+
+    # Combine text columns into a single string
+    def combine_text(example):
+        job_title = example.get("Job Title") or ""
+        qualifications = example.get("Preferred Qualifications") or ""
+        company = example.get("Hiring Company") or ""
+        applicant = example.get("Applicant Name") or ""
+        past_exp = example.get("Past Working Experience") or ""
+        current_exp = example.get("Current Working Experience") or ""
+        skills = example.get("Skillsets") or ""
+        education = example.get("Qualifications") or ""
+        cover_letter = example.get("Cover Letter") or ""
+        return {"text": (
+            f"Job Title: {job_title}\n"
+            f"Preferred Qualifications: {qualifications}\n"
+            f"Hiring Company: {company}\n"
+            f"Applicant Name: {applicant}\n"
+            f"Past Experience: {past_exp}\n"
+            f"Current Experience: {current_exp}\n"
+            f"Skillsets: {skills}\n"
+            f"Qualifications: {education}\n"
+            f"Cover Letter: {cover_letter}"
+        )}
+
+    dataset = dataset.map(combine_text)
+
+    # === 2. Load model & tokenizer ===
+    hf_token = os.getenv("hf_llama3")
+    login(token = hf_token)
+    model_id = "meta-llama/Llama-3.1-8B-Instruct"
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    tokenizer.pad_token = tokenizer.eos_token  # avoids padding errors
+
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="cpu",  # use CPU only
+        low_cpu_mem_usage=True
+    )
+
+    # === 3. Apply LoRA for parameter-efficient fine-tuning ===
+    lora_config = LoraConfig(
+        task_type=TaskType.CAUSAL_LM,
+        r=8,               # low-rank dimension
+        lora_alpha=16,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "v_proj"]  # LoRA injects into these layers
+    )
+    model = get_peft_model(model, lora_config)
+
+    # === 4. Tokenize dataset ===
+    def tokenize_function(examples):
+        return tokenizer(examples["text"], truncation=True, max_length=1024)
+
+    tokenized_datasets = dataset.map(
+        tokenize_function,
+        batched=True,
+        remove_columns=dataset['train'].column_names
+    )
+
+    # === 5. Data collator ===
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    # === 6. Training arguments ===
+    training_args = TrainingArguments(
+        output_dir="./llama3_coverletter_lora",
+        eval_strategy="steps",
+        eval_steps=500,
+        save_steps=500,
+        learning_rate=2e-4,  # LoRA can use higher LR
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        num_train_epochs=1,
+        save_total_limit=2,
+        fp16=False,  # CPU can't do fp16
+        logging_steps=100
+    )
+
+    # === 7. Trainer ===
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_datasets["train"],
+        eval_dataset=tokenized_datasets["test"],
+        tokenizer=tokenizer,
+        data_collator=data_collator
+    )
+
+    # === 8. Train ===
+    trainer.train()
+
+    # === 9. Save LoRA adapter & tokenizer ===
+    model.save_pretrained("./llama3_coverletter_lora")
+    tokenizer.save_pretrained("./llama3_coverletter_lora")
+
+if __name__ == "__main__":
+    main()
