@@ -65,17 +65,14 @@ async function callHuggingFace(prompt, token) {
             content: prompt
           }
         ],
-      parameters: {
-        max_length: 1024,
-        temperature: 0.7,
-        top_p: 0.9,
-        do_sample: true,
-        repetition_penalty: 1.2
-      }
+      max_tokens: 1024,
+      temperature: 0.7,
+      top_p: 0.9,
+      stream: false
     };
 
 
-    console.log('Request parameters:', requestBody.parameters);
+    console.log('Request parameters:', requestBody);
     
     const response = await fetch(API_URL, {
       method: 'POST',

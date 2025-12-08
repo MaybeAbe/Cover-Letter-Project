@@ -12,7 +12,8 @@
   "host_permissions": [
     "https://*.myworkdaysite.com/*",
     "https://*.myworkdayjobs.com/*",
-    "https://router.huggingface.co/*"
+    "https://router.huggingface.co/*",
+    "https://api-inference.huggingface.co/*"
   ],
   "action": {
     "default_popup": "popup.html",
